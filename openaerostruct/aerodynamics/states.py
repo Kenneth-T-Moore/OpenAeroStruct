@@ -1,5 +1,6 @@
 import openmdao.api as om
 from openaerostruct.aerodynamics.get_vectors import GetVectors
+from openaerostruct.aerodynamics.jax_get_vectors_eval_mtx import GetVectorsEvalVelMtx
 from openaerostruct.aerodynamics.collocation_points import CollocationPoints
 from openaerostruct.aerodynamics.eval_mtx import EvalVelMtx
 from openaerostruct.aerodynamics.convert_velocity import ConvertVelocity
@@ -23,10 +24,13 @@ class VLMStates(om.Group):
         self.options.declare('surfaces', types=list)
         self.options.declare('rotational', False, types=bool,
                              desc="Set to True to turn on support for computing angular velocities")
+        self.options.declare('jax', False, types=bool,
+                             desc="Set to True to combine comps and compute partials with Jax AD.")
 
     def setup(self):
         surfaces = self.options['surfaces']
         rotational = self.options['rotational']
+        jax = self.options['jax']
 
         num_collocation_points = 0
         for surface in surfaces:
@@ -49,19 +53,29 @@ class VLMStates(om.Group):
             promotes_inputs=['*'],
             promotes_outputs=['*'])
 
-        # Get vectors from mesh points to collocation points
-        self.add_subsystem('get_vectors',
-             GetVectors(surfaces=surfaces, num_eval_points=num_collocation_points,
-                eval_name='coll_pts'),
-             promotes_inputs=['*'],
-             promotes_outputs=['*'])
+        if jax:
+            # Get vectors from mesh points to collocation points. Then, construct matrix based
+            # on rings, not horseshoes.
+            self.add_subsystem('get_vectors_mtx_assy',
+                 GetVectorsEvalVelMtx(surfaces=surfaces, num_eval_points=num_collocation_points,
+                    eval_name='coll_pts'),
+                 promotes_inputs=['*'],
+                 promotes_outputs=['*'])
 
-        # Construct matrix based on rings, not horseshoes
-        self.add_subsystem('mtx_assy',
-             EvalVelMtx(surfaces=surfaces, num_eval_points=num_collocation_points,
-                eval_name='coll_pts'),
-             promotes_inputs=['*'],
-             promotes_outputs=['*'])
+        else:
+            # Get vectors from mesh points to collocation points
+            self.add_subsystem('get_vectors',
+                 GetVectors(surfaces=surfaces, num_eval_points=num_collocation_points,
+                    eval_name='coll_pts'),
+                 promotes_inputs=['*'],
+                 promotes_outputs=['*'])
+
+            # Construct matrix based on rings, not horseshoes
+            self.add_subsystem('mtx_assy',
+                 EvalVelMtx(surfaces=surfaces, num_eval_points=num_collocation_points,
+                    eval_name='coll_pts'),
+                 promotes_inputs=['*'],
+                 promotes_outputs=['*'])
 
         # Convert freestream velocity to array of velocities
         if rotational:
